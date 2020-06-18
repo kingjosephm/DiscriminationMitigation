@@ -12,10 +12,14 @@ class DiscriminationMitigator:
         self.train = train
         self.weights = weights
 
-        # Ensure inputs are correct type
+        # Ensure inputs are correct type and format
         assert (isinstance(self.df, pd.DataFrame)), "\nPlease ensure parameter df is a Pandas dataframe!"
+
+        assert(self.df.shape[1] == self.df.select_dtypes(include=np.number).shape[1]), "\nDataframe supplied in param df must be all numeric dtypes!"
+
         assert (isinstance(self.model, (tf.python.keras.engine.sequential.Sequential,
-                                        tf.python.keras.engine.training.Model))), "\nPlease parameter model is either tf.keras Model or Sequential class!"
+                                        tf.python.keras.engine.training.Model))), "\nPlease verify parameter model is either tf.keras Model or Sequential class!"
+
         assert (isinstance(config, dict)), "\nPlease ensure parameter config is a dictionary!"
 
         # Ensure all protected class features in data
@@ -24,6 +28,11 @@ class DiscriminationMitigator:
 
         if self.train is not None:
             assert (isinstance(self.train, pd.DataFrame))
+
+            assert (self.train.shape[1] == self.train.select_dtypes(include=np.number).shape[1]), "\nDataframe supplied in param train must be all numeric dtypes!"
+
+            if not all(col in self.df.columns for col in self.train.columns):
+                raise KeyError("\nNot all columns in df are in train! Please ensure they are and try again.")
 
         if self.weights is not None:
             assert (isinstance(self.weights, dict))
@@ -41,7 +50,7 @@ class DiscriminationMitigator:
                     marginal_sum += share
                 if marginal_sum != 1.0:
                     raise ValueError(
-                        "\nThe marginal sum for feature '{}' does not sum to 1! Marginals must sum to 1!".format(
+                        "\nThe marginals for feature '{}' do not sum to 1! Marginals must sum to 1!".format(
                             feature_name))
             self.weights = reweights
 
@@ -72,6 +81,43 @@ class DiscriminationMitigator:
         for feature in self.config['protected_class_features']:
             marginals[feature] = df[feature].value_counts(normalize=True, dropna=False).to_dict()
         return marginals
+
+    def adjust_missing_categ_vals(sel, dictionary, feature, iterated_predictions):
+        '''
+        Method checks whether all categorial values (keys) present in dictionary are also in iterated_predictions (i.e. self.df)
+            and consolidates values corresponding to missing keys into overlapping keys between two sources
+        :param dictionary: dict, inner part of nested dictionary from self.feature_marginals where keys are values of a given protected class feature
+        :param feature: str, protected class feature name
+        :param iterated_predictions: Pandas dataframe, N x K matrix of predictions from self.iterate_predictions
+        :return:
+        '''
+        # Identify which if any category values (key(s)) of feature missing
+        dict_keys = list(dictionary.keys())
+        feature_values = [float(i.split('_')[-1]) for i in iterated_predictions.columns if feature + '_' in i]
+        missing_keys = [i for i in dict_keys if i not in feature_values]
+
+        if missing_keys:
+            warnings.warn("\nThe following category value(s) of feature '{}' are present in test dataframe, but not in \n"
+                          "df supplied: {}. These values cannot be directly reweight in supplied df. Weights of \n"
+                          "overlapping categories in both dataframes will be adjusted."\
+                          .format(feature, ' '.join([str(i) for i in missing_keys])))
+
+        # Sum share of all categories not present in self.df but in self.train
+        tot_share = 0
+        for x in missing_keys:
+            tot_share += dictionary[x]
+        adjustment = 1 - tot_share
+
+        # Adjust overlapping keys
+        overlapping_keys = [i for i in dict_keys if i not in missing_keys]
+        for key in overlapping_keys:
+            dictionary[key] = dictionary[key] / adjustment
+
+        # Delete non-overlapping keys from dictionary
+        for key in missing_keys:
+            del dictionary[key]
+
+        return dictionary
 
     def check_for_onehot(self):
         '''
@@ -125,8 +171,9 @@ class DiscriminationMitigator:
 
         # Marginals for either train or df
         if self.train is not None:
-            marginals = self.feature_marginals(
-                self.train)  # marginals from training set to reweight test with same composition
+            marginals = self.feature_marginals(self.train)  # marginals from training set to reweight test with same composition
+            for feature in marginals.keys(): # ensure all categorical values for each feature present in test also in self.df
+                marginals[feature].update(self.adjust_missing_categ_vals(marginals[feature], feature, iterated_predictions))
         else:
             marginals = self.feature_marginals(self.df)
 
@@ -175,6 +222,14 @@ if __name__ == '__main__':
     # Train / val split
     X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, random_state=123, test_size=0.2)
 
+    X_train.reset_index(drop=True, inplace=True)
+    X_val.reset_index(drop=True, inplace=True)
+    X_test.reset_index(drop=True, inplace=True)
+    y_train.reset_index(drop=True, inplace=True)
+    y_val.reset_index(drop=True, inplace=True)
+    y_test.reset_index(drop=True, inplace=True)
+    X_train.iloc[:500, -1].replace(4, 5, inplace=True)
+
     # Tensorflow Keras Sequential class
     tf.keras.backend.clear_session()
     model = tf.keras.Sequential()
@@ -198,5 +253,5 @@ if __name__ == '__main__':
     model.compile(optimizer='adam', loss='mse')
     model.fit(X_train, y_train, epochs=80, batch_size=64, validation_data=(X_val, y_val))
 
-    dm = DiscriminationMitigator(df=X_test, model=model, config=config)
+    dm = DiscriminationMitigator(df=X_test, model=model, config=config, train=X_train)
     predictions = dm.predictions()
