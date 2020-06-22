@@ -1,7 +1,7 @@
-import json, warnings
+import warnings
+import pandas as pd
+import numpy as np
 import tensorflow as tf
-from sklearn.model_selection import train_test_split
-from utils import *
 
 class DiscriminationMitigator:
 
@@ -67,8 +67,8 @@ class DiscriminationMitigator:
             for val in self.df[feature].unique():
                 temp = self.df.copy()
                 temp[feature] = val
-                predictions = pd.concat([predictions, pd.DataFrame(model.predict(temp),index=self.df.index).rename(
-                    columns={0: feature + '_' + str(val)})], axis=1)
+                predictions = pd.concat([predictions, pd.DataFrame(self.model.predict(temp), index=self.df.index).rename(
+                    columns={0: feature + '_' + str(float(val))})], axis=1)
         return predictions
 
     def feature_marginals(self, df):
@@ -149,7 +149,12 @@ class DiscriminationMitigator:
             wt = np.zeros(shape=len(prediction_df))
             if isinstance(val, dict):  # check if nested dictionary, must be if 1+ value per feature
                 for elem, share in marginal_dict[feature].items():
-                    wt += prediction_df[feature + '_' + str(elem)] * share
+                    try:
+                        wt += prediction_df[feature + '_' + str(float(elem))] * share
+                    except KeyError: # catch if key not part of dictionary
+                        raise Exception("\nThe category value '{}' in feature '{}' of supplied dictionary does not exist \n"
+                              "in supplied dataframe! Please ensure all values for all protected class features \n"
+                              "in this dictionary exist in the data.".format(elem, feature))
             else:  # if feature invariant
                 raise ValueError("\nProtected class feature '{}' is invariant!".format(feature))
             wt_pred = pd.concat([wt_pred, pd.DataFrame({feature: wt})], axis=1)
@@ -202,56 +207,3 @@ class DiscriminationMitigator:
             output_predictions['cust_wts'] = reweighted_predictions.mean(axis=1)
 
         return output_predictions
-
-
-if __name__ == '__main__':
-
-    synth = simple_synth()
-    synth['z'] = np.random.randint(low=1, high=5, size=len(synth))
-
-    with open('config.json') as j:
-        config = json.load(j)
-
-    with open('weights.json') as j:
-        weights = json.load(j)
-
-    # Train (and val) / test split
-    X_train, X_test, y_train, y_test = train_test_split(synth.loc[:, ~synth.columns.isin(config['target_feature'])],
-                                                        synth[config['target_feature']], random_state=123,
-                                                        test_size=500)
-    # Train / val split
-    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, random_state=123, test_size=0.2)
-
-    X_train.reset_index(drop=True, inplace=True)
-    X_val.reset_index(drop=True, inplace=True)
-    X_test.reset_index(drop=True, inplace=True)
-    y_train.reset_index(drop=True, inplace=True)
-    y_val.reset_index(drop=True, inplace=True)
-    y_test.reset_index(drop=True, inplace=True)
-    X_train.iloc[:500, -1].replace(4, 5, inplace=True)
-
-    # Tensorflow Keras Sequential class
-    tf.keras.backend.clear_session()
-    model = tf.keras.Sequential()
-    model.add(tf.keras.layers.Dense(8))
-    model.add(tf.keras.layers.Dropout(0.3))
-    model.add(tf.keras.layers.Dense(16))
-    model.add(tf.keras.layers.Dropout(0.1))
-    model.add(tf.keras.layers.Dense(1))
-    model.compile(optimizer='adam', loss='mse')
-    model.fit(X_train, y_train, epochs=80, batch_size=64, validation_data=(X_val, y_val))
-
-    # Tensorflow Keras Model class
-    tf.keras.backend.clear_session()
-    inputs = tf.keras.Input(shape=3,)
-    dense = tf.keras.layers.Dense(8)(inputs)
-    dropout = tf.keras.layers.Dropout(0.3)(dense)
-    dense = tf.keras.layers.Dense(16)(dropout)
-    dropout = tf.keras.layers.Dropout(0.1)(dense)
-    output = tf.keras.layers.Dense(1, activation='linear', name='output')(dropout)
-    model = tf.keras.Model(inputs=inputs, outputs=output)
-    model.compile(optimizer='adam', loss='mse')
-    model.fit(X_train, y_train, epochs=80, batch_size=64, validation_data=(X_val, y_val))
-
-    dm = DiscriminationMitigator(df=X_test, model=model, config=config, train=X_train)
-    predictions = dm.predictions()
