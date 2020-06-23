@@ -2,59 +2,55 @@ import warnings
 import pandas as pd
 import numpy as np
 import tensorflow as tf
+from typing import List, Dict, Union
+
+def custom_formatwarning(msg, *args, **kwargs):
+    return str(msg) + '\n'
+warnings.formatwarning = custom_formatwarning
 
 class DiscriminationMitigator:
 
-    def __init__(self, df, model, config, train=None, weights=None):
+    def __init__(self,
+                 df: Union[List, pd.core.frame.DataFrame],
+                 model: Union[tf.python.keras.engine.sequential.Sequential, tf.python.keras.engine.training.Model],
+                 config: Dict,
+                 train: Union[None, List, pd.core.frame.DataFrame] = None,
+                 weights: Union[None, Dict] = None) -> None:
         self.df = df
         self.model = model
         self.config = config
         self.train = train
-        self.weights = weights
-
-        # Ensure inputs are correct type and format
-        assert (isinstance(self.df, pd.DataFrame)), "\nPlease ensure parameter df is a Pandas dataframe!"
-
-        assert(self.df.shape[1] == self.df.select_dtypes(include=np.number).shape[1]), "\nDataframe supplied in param df must be all numeric dtypes!"
-
-        assert (isinstance(self.model, (tf.python.keras.engine.sequential.Sequential,
-                                        tf.python.keras.engine.training.Model))), "\nPlease verify parameter model is either tf.keras Model or Sequential class!"
-
-        assert (isinstance(config, dict)), "\nPlease ensure parameter config is a dictionary!"
-
-        # Ensure all protected class features in data
-        if not all(elem in self.df.columns for elem in self.config['protected_class_features']):
-            raise ValueError("\nPlease ensure all protected class features are in parameter df!")
 
         if self.train is not None:
-            assert (isinstance(self.train, pd.DataFrame))
-
-            assert (self.train.shape[1] == self.train.select_dtypes(include=np.number).shape[1]), "\nDataframe supplied in param train must be all numeric dtypes!"
-
             if not all(col in self.df.columns for col in self.train.columns):
                 raise KeyError("\nNot all columns in df are in train! Please ensure they are and try again.")
 
-        if self.weights is not None:
-            assert (isinstance(self.weights, dict))
+        if weights is not None:
+            self.weights = self.check_weights(weights)
 
-            # Change weight category codes from str -> float (json requires keys as string)
-            # Also ensure marginals per feature sum to 1
-            reweights = {}
-            for feature_name in weights.keys():  # individual protected feature
-                marginal_sum = 0
-                for categ_value, share in weights[
-                    feature_name].items():  # category value associated with a protected class feature
-                    if feature_name not in reweights:
-                        reweights[feature_name] = {}
-                    reweights[feature_name].update({float(categ_value): share})
-                    marginal_sum += share
-                if marginal_sum != 1.0:
-                    raise ValueError(
-                        "\nThe marginals for feature '{}' do not sum to 1! Marginals must sum to 1!".format(
-                            feature_name))
-            self.weights = reweights
+    def check_weights(self, weights: Dict) -> Dict:
+        '''
+        Changes weight category codes (keys) from strings (JSON required) to floats. Also ensures marginals
+        per feature sum to 1.
+        :param weights: dict, user-supplied custom marginal distributions
+        :return: modified dictionary of weights
+        '''
+        reweights = {}
+        for feature_name in weights.keys():  # individual protected feature
+            marginal_sum = 0
+            for categ_value, share in weights[
+                feature_name].items():  # category value associated with a protected class feature
+                if feature_name not in reweights:
+                    reweights[feature_name] = {}
+                reweights[feature_name].update({float(categ_value): share})
+                marginal_sum += share
+            if marginal_sum != 1.0:
+                raise ValueError(
+                    "\nThe marginals for feature '{}' do not sum to 1! Marginals must sum to 1!".format(
+                        feature_name))
+        return reweights
 
-    def iterate_predictions(self):
+    def iterate_predictions(self) -> pd.core.frame.DataFrame:
         '''
         Method iteratively generates N x 1 vector of predictions across all unique categorical value (K) of all
             protected class features (C). On each iteration, all observations in self.df are (re)assigned the value Ki (i.e.
@@ -71,7 +67,7 @@ class DiscriminationMitigator:
                     columns={0: feature + '_' + str(float(val))})], axis=1)
         return predictions
 
-    def feature_marginals(self, df):
+    def feature_marginals(self, df: Union[List, pd.core.frame.DataFrame]) -> Dict:
         '''
         Generates dictionary of marginal distributions per feature in a dataframe.
         :param df: Pandas dataframe, input dataframe from which marginal distributions for each protected class feature generated.
@@ -82,15 +78,16 @@ class DiscriminationMitigator:
             marginals[feature] = df[feature].value_counts(normalize=True, dropna=False).to_dict()
         return marginals
 
-    def adjust_missing_categ_vals(sel, dictionary, feature, iterated_predictions):
+    def adjust_missing_categ_vals(self, dictionary: Dict, feature: str, iterated_predictions: pd.core.frame.DataFrame) -> Dict:
         '''
         Method checks whether all categorial values (keys) present in dictionary are also in iterated_predictions (i.e. self.df)
             and consolidates values corresponding to missing keys into overlapping keys between two sources
         :param dictionary: dict, inner part of nested dictionary from self.feature_marginals where keys are values of a given protected class feature
         :param feature: str, protected class feature name
         :param iterated_predictions: Pandas dataframe, N x K matrix of predictions from self.iterate_predictions
-        :return:
+        :return: dictionary of overlapping keys between param dictionary and parm iterated_predictions
         '''
+
         # Identify which if any category values (key(s)) of feature missing
         dict_keys = list(dictionary.keys())
         feature_values = [float(i.split('_')[-1]) for i in iterated_predictions.columns if feature + '_' in i]
@@ -98,9 +95,9 @@ class DiscriminationMitigator:
 
         if missing_keys:
             warnings.warn("\nThe following category value(s) of feature '{}' are present in test dataframe, but not in \n"
-                          "df supplied: {}. These values cannot be directly reweight in supplied df. Weights of \n"
-                          "overlapping categories in both dataframes will be adjusted."\
-                          .format(feature, ' '.join([str(i) for i in missing_keys])))
+                  "df supplied: {}. These values cannot be directly reweight in supplied df. Weights of \n"
+                  "overlapping categories in both dataframes will be adjusted. \n"\
+                  .format(feature, ' '.join([str(i) for i in missing_keys])))
 
         # Sum share of all categories not present in self.df but in self.train
         tot_share = 0
@@ -119,7 +116,7 @@ class DiscriminationMitigator:
 
         return dictionary
 
-    def check_for_onehot(self):
+    def check_for_onehot(self) -> None:
         '''
         Checks whether any protected class features in self.df are extremely correlated, suggesting one-hot vectors. Users
             must ensure that if there is no reference category in trained model that adjacent one-hot vector marginals
@@ -131,10 +128,10 @@ class DiscriminationMitigator:
         extreme_corr = correlations[correlations > 0.9999].index.tolist()
 
         if extreme_corr:
-            warnings.warn("\n Warning! The following features are extremely correlated and thus may be one-hot vectors: {}. \n"
-                          "If no category is omitted, users must ensure custom marginal weights for one-hot vectors align correctly.".format(' '.join(extreme_corr)))
+            warnings.warn("\nWarning! The following features are extremely correlated and thus may be one-hot vectors: {}. \n"
+                 "If no category is omitted, users must ensure custom marginal weights for one-hot vectors align correctly.".format(' '.join(extreme_corr)))
 
-    def weighted_predictions(self, marginal_dict, prediction_df):
+    def weighted_predictions(self, marginal_dict: Dict, prediction_df: pd.core.frame.DataFrame) -> pd.core.frame.DataFrame:
         '''
         Method weights the N x K matrix of predictions in `prediction_df` according to the marginal distribution of each
             particular categorical value, Ki, based on dictionary of marginals. The reduces the dimension of the prediction
@@ -160,7 +157,7 @@ class DiscriminationMitigator:
             wt_pred = pd.concat([wt_pred, pd.DataFrame({feature: wt})], axis=1)
         return wt_pred
 
-    def predictions(self):
+    def predictions(self) -> pd.core.frame.DataFrame:
         '''
         Generates predictions by calling methods of class.
         :return: Pandas dataframe of 3 or possibly 4 columns of predictions:
