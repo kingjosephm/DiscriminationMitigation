@@ -1,4 +1,4 @@
-import warnings
+import warnings, copy
 import pandas as pd
 import numpy as np
 import tensorflow as tf
@@ -11,21 +11,22 @@ warnings.formatwarning = custom_formatwarning
 class DiscriminationMitigator:
 
     def __init__(self,
-                 df: Union[List, pd.core.frame.DataFrame],
+                 df: Union[List[Union[pd.core.series.Series, pd.core.frame.DataFrame]], pd.core.frame.DataFrame],
                  model: Union[tf.python.keras.engine.sequential.Sequential, tf.python.keras.engine.training.Model],
                  config: Dict,
-                 train: Union[None, List, pd.core.frame.DataFrame] = None,
+                 train: Union[None, List[Union[pd.core.series.Series, pd.core.frame.DataFrame]], pd.core.frame.DataFrame] = None,
                  weights: Union[None, Dict] = None) -> None:
-        self.df = df
         self.model = model
         self.config = config
+        self.weights = weights
+        self.df = df
         self.train = train
 
-        if self.train is not None:
-            if not all(col in self.df.columns for col in self.train.columns):
-                raise KeyError("\nNot all columns in df are in train! Please ensure they are and try again.")
+        # Ensure all protected class features listed in config also in df
+        if not all(elem in self.ensure_dataframe(self.df).columns for elem in self.config['protected_class_features']):
+            raise ValueError("\nPlease ensure all protected class features are in parameter df!")
 
-        if weights is not None:
+        if self.weights is not None:
             self.weights = self.check_weights(weights)
 
     def check_weights(self, weights: Dict) -> Dict:
@@ -45,10 +46,26 @@ class DiscriminationMitigator:
                 reweights[feature_name].update({float(categ_value): share})
                 marginal_sum += share
             if marginal_sum != 1.0:
-                raise ValueError(
-                    "\nThe marginals for feature '{}' do not sum to 1! Marginals must sum to 1!".format(
-                        feature_name))
+                raise ValueError("\nThe marginals for feature '{}' do not sum to 1! Marginals must sum to 1!"\
+                    .format(feature_name))
         return reweights
+
+    def ensure_dataframe(self, df: Union[List[Union[pd.core.series.Series, pd.core.frame.DataFrame]], pd.core.frame.DataFrame]) -> pd.core.frame.DataFrame:
+        '''
+        Ensures df is a pd.DataFrame. If list, converts to pd.DataFrame, else simply returns pd.DataFrame
+        :param df: list or pd.DataFrame
+        :return: pd.DataFrame
+        '''
+
+        if isinstance(df, list):
+            for i in range(len(df)):
+                if i == 0:
+                    dataframe = df[0]
+                else:
+                    dataframe = pd.concat([df[i], dataframe], axis=1)
+        else:
+            dataframe = df
+        return dataframe
 
     def iterate_predictions(self) -> pd.core.frame.DataFrame:
         '''
@@ -59,15 +76,51 @@ class DiscriminationMitigator:
         :return: Pandas dataframe
         '''
         predictions = pd.DataFrame()
-        for feature in self.config['protected_class_features']:
-            for val in self.df[feature].unique():
-                temp = self.df.copy()
-                temp[feature] = val
-                predictions = pd.concat([predictions, pd.DataFrame(self.model.predict(temp), index=self.df.index).rename(
-                    columns={0: feature + '_' + str(float(val))})], axis=1)
+        if isinstance(self.df, pd.core.frame.DataFrame):  # if self.df pd.DataFrame
+            for feature in self.config['protected_class_features']:
+                for val in self.df[feature].unique():
+                    temp = copy.deepcopy(self.df)
+                    temp[feature] = val
+                    predictions = pd.concat([predictions, pd.DataFrame(self.model.predict(temp), index=self.df.index).rename(
+                        columns={0: feature + '_' + str(float(val))})], axis=1)
+        else:  # if self.df list
+            for feature in self.config['protected_class_features']:
+                for i in range(len(self.df)):
+                    if isinstance(self.df[i],
+                                  pd.core.series.Series):  # syntax for column name of pd.Series different than pd.DataFrame
+                        if self.df[i].name == feature:
+                            for val in self.df[i].unique():
+                                temp = copy.deepcopy(self.df)
+                                temp[i].values[:] = val
+                                predictions = pd.concat(
+                                    [predictions, pd.DataFrame(self.model.predict(temp), index=self.df[i].index).rename(
+                                        columns={0: feature + '_' + str(float(val))})], axis=1)
+                        else:
+                            pass  # individual feature is not a protected class feature
+                    else:  # if pd.DataFrame within list
+                        if [j for j in self.df[i].columns if feature in j]:  # check if feature in dataframe
+                            for val in self.df[i][feature].unique():
+                                temp = copy.deepcopy(self.df)
+                                temp[i][feature] = val
+                                predictions = pd.concat(
+                                    [predictions, pd.DataFrame(self.model.predict(temp), index=self.df[i].index).rename(
+                                        columns={0: feature + '_' + str(float(val))})], axis=1)
+                        else:
+                            pass  # no protected class feature(s) in dataframe
         return predictions
 
-    def feature_marginals(self, df: Union[List, pd.core.frame.DataFrame]) -> Dict:
+    def unadjusted_prediction(self) -> pd.core.series.Series:
+        '''
+        Estimates unadjusted model predictions, with syntax varying slightly depending on input data type of self.df
+        :return: pd.Series of unadjusted predictions
+        '''
+        if isinstance(self.df, pd.core.frame.DataFrame):
+            unadj_pred = pd.DataFrame(self.model.predict(self.df), index=self.df.index)[0]  # unadjusted predictions
+        else: # if list
+            unadj_pred = pd.DataFrame(self.model.predict(self.df), index=self.df[0].index)[0]  # unadjusted predictions
+        return unadj_pred
+
+    def feature_marginals(self, df: pd.core.frame.DataFrame) -> Dict:
         '''
         Generates dictionary of marginal distributions per feature in a dataframe.
         :param df: Pandas dataframe, input dataframe from which marginal distributions for each protected class feature generated.
@@ -124,7 +177,7 @@ class DiscriminationMitigator:
             must be the corresponding 20%.
         :return: nothing, a warning message if two or more features are correlated > 0.9999
         '''
-        correlations = self.df.corr().abs().iloc[0, :]  # correlation matrix, selecting first row
+        correlations = self.ensure_dataframe(self.df).corr().abs().iloc[0, :]  # correlation matrix, selecting first row
         extreme_corr = correlations[correlations > 0.9999].index.tolist()
 
         if extreme_corr:
@@ -173,18 +226,18 @@ class DiscriminationMitigator:
 
         # Marginals for either train or df
         if self.train is not None:
-            marginals = self.feature_marginals(self.train)  # marginals from training set to reweight test with same composition
+            marginals = self.feature_marginals(self.ensure_dataframe(self.train))  # marginals from training set to reweight test with same composition
             for feature in marginals.keys(): # ensure all categorical values for each feature present in test also in self.df
                 marginals[feature].update(self.adjust_missing_categ_vals(marginals[feature], feature, iterated_predictions))
         else:
-            marginals = self.feature_marginals(self.df)
+            marginals = self.feature_marginals(self.ensure_dataframe(self.df))
 
         # Collapse down to N x C matrix of weighted predictions
         weighted_predictions = self.weighted_predictions(marginals, iterated_predictions)
 
         # Output dataframe of adjusted final predictions
         output_predictions = pd.DataFrame()
-        output_predictions['unadj_pred'] = pd.DataFrame(self.model.predict(self.df), index=self.df.index)[0] # unadjusted predictions
+        output_predictions['unadj_pred'] = self.unadjusted_prediction()
         output_predictions['unif_wts'] = iterated_predictions.mean(axis=1)  # uniform weights (i.e. simple average)
         output_predictions['pop_wts'] = weighted_predictions.mean(axis=1)  # weighted to match train or other marginal dist
 
