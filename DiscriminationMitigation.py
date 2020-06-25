@@ -16,11 +16,11 @@ class DiscriminationMitigator:
                  config: Dict,
                  train: Union[None, List[Union[pd.core.series.Series, pd.core.frame.DataFrame]], pd.core.frame.DataFrame] = None,
                  weights: Union[None, Dict] = None) -> None:
+        self.df = df
         self.model = model
         self.config = config
-        self.weights = weights
-        self.df = df
         self.train = train
+        self.weights = weights
 
         # Ensure all protected class features listed in config also in df
         if not all(elem in self.ensure_dataframe(self.df).columns for elem in self.config['protected_class_features']):
