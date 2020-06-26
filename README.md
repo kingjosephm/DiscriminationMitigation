@@ -9,7 +9,7 @@ takes a pre-trained ML model - **that included the protected class attribute(s)*
 applies various weights to a series of counterfactual predictions per observation,
 yielding adjusted predictions. Importantly, this method does not require advanced
 statistical or programming knowledge, and can be used with two dominant Python ML
-libraries: Tensorflow Keras and LightGBM (still to come).
+libraries: Tensorflow Keras and LightGBM (still to come). For example code, see `Example.ipynb`.
 
 
 #### Algorithm
@@ -29,16 +29,21 @@ individual *i* (i = 1...*N*):
     adjusted predictions. Typically the test set.
 - `model` - Pre-trained Tensorflow Keras Model or Sequential class models. ***Model
    must have been trained using all protected class feature(s)***
-- `config` - JSON dictionary, see example. This **must** include keys for
+- `config` - JSON dictionary, see `Example.ipynb`. This **must** include keys for
   'protected_class_features' (i.e. a list of all protected class feature names)
   and 'target_feature'
 - `train` (optional) - Pandas DataFrame or list of Pandas Series/DataFrame(s) used
     to weight the predictions to reflect the marginal distributions of *C*. This should be
     the same training set used to train `model`, but need not be. Importantly, if this
     dataframe includes a value for a protected class features that is not found in `df`
-    (e.g. sparsely populated values or a small test set) this will trigger a UserWarning and overlapping protected class values between `df` and `train` will be adjusted so that the marginals for that feature sums to 1.    
+    (e.g. sparsely populated values or a small test set) this will trigger a UserWarning 
+    and overlapping protected class values between `df` and `train` will be adjusted so 
+    that the marginals for that feature sums to 1.    
 - `weights` (optional) - JSON dictionary of user-specified marginal distributions, see
-    example. *Note, feature marginals must sum to 1*. The program will raise a UserWarning
+    `Example.ipynb`. Users can specify the custom marginals of anywhere between one and the full
+    number of protected class features listed in `config`. Marginals from either `df` 
+    or `train` (if supplied) are used for the remaining protected class features. *Note, 
+    feature marginals must sum to 1*. The program will raise a Warning
     if two or more features in `df` appear to be one-hot vectors, reminding the user that the
     marginals of adjacent one-hot vectors should reflect mutual exclusivity. For example, if
     a binary variable is transformed into two one-hot vectors, the marginal distributions
@@ -46,7 +51,7 @@ individual *i* (i = 1...*N*):
     must ensure the custom marginals make sense.
 
 #### Outputs
-A Pandas Dataframe with 4 (or optionally 5) columns:
+A Pandas Dataframe with 3 (or optionally 4) columns:
 - `unadj_pred` - unadjusted predictions, potentially containing discriminatory effect
 - `unif_wts` - uniform weights, i.e. a simple average across all counterfactual predictions
 - `pop_wts` - population weights, i.e. weighted to reflect marginal distribution

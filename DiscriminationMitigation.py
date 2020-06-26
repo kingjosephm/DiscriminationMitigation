@@ -243,17 +243,10 @@ class DiscriminationMitigator:
 
         # Dictionary of custom weights that combine user-supplied weights with marginals of either train or df
         if self.weights is not None:
-            custom_weights = {}
-            for feature in marginals.keys():
-                if feature in self.weights.keys():
-                    custom_weights[feature] = self.weights[feature]
-                else:
-                    custom_weights[feature] = marginals[feature]
-
             self.check_for_onehot() # check if one-hot vectors possibly present and warn
 
             # Condense user-specified marginal weights to N x 1 vector
-            reweighted_predictions = self.weighted_predictions(custom_weights, iterated_predictions)
+            reweighted_predictions = self.weighted_predictions(self.weights, iterated_predictions)
             output_predictions['cust_wts'] = reweighted_predictions.mean(axis=1)
 
         return output_predictions

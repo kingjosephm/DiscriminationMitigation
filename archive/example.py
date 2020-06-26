@@ -42,9 +42,9 @@ if __name__ == '__main__':
     # Train / val split
     X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, random_state=123, test_size=0.2)
 
-    X_train = [X_train]
-    X_test = [X_test]
-    X_val = [X_val]
+    #X_train = [X_train]
+    #X_test = [X_test]
+    #X_val = [X_val]
 
     # Tensorflow Keras Sequential class
     tf.keras.backend.clear_session()
@@ -61,3 +61,47 @@ if __name__ == '__main__':
 
     dm = DiscriminationMitigator(df=X_test, model=model, config=config, train=X_train, weights=weights)
     pred = dm.predictions()
+
+
+
+
+    iterated_predictions = dm.iterate_predictions()
+    marginals = dm.feature_marginals(dm.ensure_dataframe((dm.train)))
+    for feature in marginals.keys():
+        marginals[feature].update(dm.adjust_missing_categ_vals(marginals[feature], feature, iterated_predictions))
+
+    reweighted_predictions = dm.weighted_predictions(dm.weights, iterated_predictions)
+    weighted_predictions = dm.weighted_predictions(marginals, iterated_predictions)
+
+    foo = pd.DataFrame()
+    pd.set_option('precision', 8)
+    foo['pop'] = dm.weighted_predictions(marginals, iterated_predictions).mean(axis=1)
+    foo['cust'] = dm.weighted_predictions(dm.weights, iterated_predictions).mean(axis=1)
+    foo.corr()
+    foo.describe()
+
+    custom_weights = {'c0': {0.0: 0.1, 1.0: 0.9},
+        'c1': {0.0: 0.9, 1.0: 0.1},
+        'z': {1.0: 0.9, 2.0: 0.02, 3.0: 0.04, 4.0: 0.04}}
+
+
+    def weighted_predictions(marginal_dict, prediction_df):
+        wt_pred = pd.DataFrame()
+        for feature, val in marginal_dict.items():
+            wt = np.zeros(shape=len(prediction_df))
+            if isinstance(val, dict):  # check if nested dictionary, must be if 1+ value per feature
+                for elem, share in marginal_dict[feature].items():
+                    try:
+                        wt += prediction_df[feature + '_' + str(float(elem))] * share
+                    except KeyError:  # catch if key not part of dictionary
+                        raise Exception("\nThe category value '{}' in feature '{}' of supplied dictionary does not exist \n"
+                                        "in supplied dataframe! Please ensure all values for all protected class features \n"
+                                        "in this dictionary exist in the data.".format(elem, feature))
+            else:  # if feature invariant
+                raise ValueError("\nProtected class feature '{}' is invariant!".format(feature))
+            wt_pred = pd.concat([wt_pred, pd.DataFrame({feature: wt})], axis=1)
+        return wt_pred
+
+    one = weighted_predictions(custom_weights, iterated_predictions)
+    two = weighted_predictions(marginals, iterated_predictions)
+    comb = pd.concat([one, two], axis=1)
