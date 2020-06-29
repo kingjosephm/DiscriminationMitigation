@@ -9,7 +9,8 @@ takes a pre-trained ML model - **that included the protected class attribute(s)*
 applies various weights to a series of counterfactual predictions per observation,
 yielding adjusted predictions. Importantly, this method does not require advanced
 statistical or programming knowledge, and can be used with two dominant Python ML
-libraries: Tensorflow Keras and LightGBM. For example code, see `Example.html`.
+libraries: Tensorflow Keras and LightGBM. For example code, see `Example.ipynb` or
+`Example.html`.
 
 
 #### Algorithm
