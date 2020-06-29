@@ -1,4 +1,4 @@
-import warnings, copy
+import warnings, copy, lightgbm
 import pandas as pd
 import numpy as np
 import tensorflow as tf
@@ -12,7 +12,7 @@ class DiscriminationMitigator:
 
     def __init__(self,
                  df: Union[List[Union[pd.core.series.Series, pd.core.frame.DataFrame]], pd.core.frame.DataFrame],
-                 model: Union[tf.python.keras.engine.sequential.Sequential, tf.python.keras.engine.training.Model],
+                 model: Union[tf.python.keras.engine.sequential.Sequential, tf.python.keras.engine.training.Model, lightgbm.basic.Booster],
                  config: Dict,
                  train: Union[None, List[Union[pd.core.series.Series, pd.core.frame.DataFrame]], pd.core.frame.DataFrame] = None,
                  weights: Union[None, Dict] = None) -> None:
