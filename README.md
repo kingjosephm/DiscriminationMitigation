@@ -3,11 +3,26 @@
 Motivated by the Frisch-Waugh-Lovell theorem, `DiscriminationMitigator` offers a simple, intuitive
 method to mitigate potential discrimination associated with protected class features
 (e.g. race, gender) in supervised machine learning algorithms. In general, it is not
-possible to ensure a model does not discriminate on protected class(es) without making
-strong assumptions about the data generating process. Instead, `DiscriminationMitigator`
-takes a pre-trained ML model - **that included the protected class attribute(s)** - and
-applies various weights to a series of counterfactual predictions per observation,
-yielding adjusted predictions. Importantly, this method does not require advanced
+possible to ensure a model does not, in some sense, discriminate on protected class(es) without making
+strong assumptions about the data generating process.  
+Crucially, omitting the protected class variables from the model will 
+not necessarily prevent the model from discriminating on the basis 
+of protected class membership. 
+This is because other variables might proxy for protected class membership; 
+these variables might predict a target partly through the protected class
+for which they proxy.    
+ 
+`DiscriminationMitigator` ameliorates proxy descrimination by
+taking a pre-trained ML model - **that includes the protected class attribute(s)** - 
+and averaging predictions across counterfactual protected class memberships.
+Because protected class is included in the pre-trained model,
+the extent to which other variables predict protected class membership does 
+not contribute to their prediction of the target. Averaging predictions
+across protected class counterfactuals ensures the actual protected class membership does
+not contribute to the forecast of the target.    
+   
+
+Importantly, this method does not require advanced
 statistical or programming knowledge, and can be used with two dominant Python ML
 libraries: Tensorflow Keras and LightGBM. For example code, see `Example.ipynb` or
 `Example.html`.
@@ -17,7 +32,7 @@ libraries: Tensorflow Keras and LightGBM. For example code, see `Example.ipynb` 
 Given the target variable *y*, a vector of protected class attributes *C* (*c∈C*) for
 individual *i* (i = 1...*N*):
 - For each unique value (*v∈V*) of each protected class, *c*:
-    - Set c<sub>*i*</sub> = c<sub>*v*</sub> for all *N*
+    - Set c<sub>*i*</sub> = v for all *N*
     - Generate an *N* x 1 vector of counterfactual predictions, ŷ<sub>*cv*</sub>
     - Save ŷ<sub>*cv*</sub> to dataframe Pred<sub>*counterfactual*</sub>
     - Repeat until end
@@ -34,7 +49,7 @@ individual *i* (i = 1...*N*):
   'protected_class_features' (i.e. a list of all protected class feature names)
   and 'target_feature'
 - `train` (optional) - Pandas DataFrame or list of Pandas Series/DataFrame(s) used
-    to weight the predictions to reflect the marginal distributions of *C*. This should be
+    to weight the predictions to reflect the marginal distributions of *C*. This could be
     the same training set used to train `model`, but need not be. Importantly, if this
     dataframe includes a value for a protected class features that is not found in `df`
     (e.g. sparsely populated values or a small test set) this will trigger a UserWarning 
