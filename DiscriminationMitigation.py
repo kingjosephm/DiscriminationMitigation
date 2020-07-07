@@ -1,8 +1,9 @@
-import warnings, copy, lightgbm
+import warnings, copy, lightgbm, re
 import pandas as pd
 import numpy as np
 import tensorflow as tf
-from typing import List, Dict, Union
+from itertools import product
+from typing import List, Dict, Union, Tuple
 
 def custom_formatwarning(msg, *args, **kwargs):
     return str(msg) + '\n'
@@ -27,7 +28,7 @@ class DiscriminationMitigator:
             raise ValueError("\nPlease ensure all protected class features are in parameter df!")
 
         if self.weights is not None:
-            self.weights = self.check_weights(weights)
+            self.weights = self.check_weights(self.weights)
 
     def check_weights(self, weights: Dict) -> Dict:
         '''
@@ -67,47 +68,96 @@ class DiscriminationMitigator:
             dataframe = df
         return dataframe
 
-    def iterate_predictions(self) -> pd.core.frame.DataFrame:
+    def uniq_feature_vals(self, df: pd.core.frame.DataFrame) -> List:
         '''
-        Method iteratively generates N x 1 vector of predictions across all unique categorical value (K) of all
-            protected class features (C). On each iteration, all observations in self.df are (re)assigned the value Ki (i.e.
-            a particular categorical value of feature c) and using this altered dataframe the model generates an N x 1
-            vector of predictions. The final output dataframe is N x K dimensions.
-        :return: Pandas dataframe
+        Generates list of lists of all unique values across all protected class features of Pandas DataFrame.
+        :return: list of lists unique values.
         '''
+        combos = []
+        for feature in self.config['protected_class_features']:
+            combos.append(list(df[feature].unique()))
+        return combos
+
+    def drop_duplicate_cols(self, df: pd.core.frame.DataFrame) -> pd.core.frame.DataFrame:
+        '''
+        Drops duplicate highly correlated features of a Pandas DataFrame, if any.
+        :param df: Pandas DataFrame
+        :return: Pandas DataFrame, minus highly correlated features
+        '''
+        corr_matrix = df.corr().abs()
+        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(np.bool)) # select upper triangle of matrix
+        to_drop = [col for col in upper.columns if any(upper[col] > 0.9999)]
+        return df.drop(columns=to_drop)
+
+    def sum_dict_vals(self, dictionary: Dict) -> float:
+        '''
+        Calculates the sum of the values of a non-nested dictionary.
+        :param dictionary: a non-nested dictionary
+        :return: float sum total
+        '''
+        sum_tot = 0
+        for _, val in dictionary.items():
+            _ = _ ; sum_tot += val
+        return sum_tot
+
+    def joint_distrib_dict(self, marginal_dict: Dict, mapping: Dict) -> Dict:
+        '''
+        Generates a dictionary of joint distributions from a supplied dictionary of marginal distributions assuming independence.
+            If sum of joint distribution is not equal to 1.0, performs adjustment to ensure this is so.
+        :param marginal_dict: dictionary of feature marginals
+        :param mapping: dictionary of mappings between column names (numbers) and the combinations of protected class
+            feature values from self.iterate_predictions()
+        :return: dictionary of joint distributions where keys pertain to column names in dataframe from self.iterate_predictions()
+        '''
+        joint_dict = {}
+        for key in mapping.keys():
+            joint_dict[key] = 1
+            for x in range(len(mapping[key])):
+                combo = mapping[key][x] # individual feature-value combination
+                joint_dict[key] *= marginal_dict[combo[0]][float(''.join(combo[1]))] # if key not in data will throw error
+
+        # Ensure joint distribution sums to 1
+        sum_tot = self.sum_dict_vals(joint_dict)
+
+        if sum_tot != 1.0:
+            for key in joint_dict.keys():
+                joint_dict[key] = joint_dict[key] / sum_tot # rescale to enfore joint distributions sum to 1
+
+        return joint_dict
+
+    def iterate_predictions(self) -> Tuple[pd.core.frame.DataFrame, Dict]:
+        '''
+        Method iteratively generates an N x 1 vector of counterfactual predictions for all combinations of values for
+            all protected class features. On each iteration, the protected class feature(s) for all observations are
+            assigned the value(s) of that combination and a prediction is made. Each pd.Series prediction is concatenated
+            onto a dataframe with the column name (e.g. 0, 1, ...) denoting a particular combination.
+        :return: Pandas dataframe of counterfactual predictions and a dictionary mapping of columns to combinations
+        '''
+
+        df = self.ensure_dataframe(self.df) # convert to pd.DataFrame if not already
+        combinations = list(product(*self.uniq_feature_vals(df))) # get list of lists of all protected class categorical values
+
         predictions = pd.DataFrame()
-        if isinstance(self.df, pd.core.frame.DataFrame):  # if self.df pd.DataFrame
-            for feature in self.config['protected_class_features']:
-                for val in self.df[feature].unique():
-                    temp = copy.deepcopy(self.df)
-                    temp[feature] = val
-                    predictions = pd.concat([predictions, pd.DataFrame(self.model.predict(temp), index=self.df.index).rename(
-                        columns={0: feature + '_' + str(float(val))})], axis=1)
-        else:  # if self.df list
-            for feature in self.config['protected_class_features']:
-                for i in range(len(self.df)):
-                    if isinstance(self.df[i],
-                                  pd.core.series.Series):  # syntax for column name of pd.Series different than pd.DataFrame
-                        if self.df[i].name == feature:
-                            for val in self.df[i].unique():
-                                temp = copy.deepcopy(self.df)
-                                temp[i].values[:] = val
-                                predictions = pd.concat(
-                                    [predictions, pd.DataFrame(self.model.predict(temp), index=self.df[i].index).rename(
-                                        columns={0: feature + '_' + str(float(val))})], axis=1)
-                        else:
-                            pass  # individual feature is not a protected class feature
-                    else:  # if pd.DataFrame within list
-                        if [j for j in self.df[i].columns if feature in j]:  # check if feature in dataframe
-                            for val in self.df[i][feature].unique():
-                                temp = copy.deepcopy(self.df)
-                                temp[i][feature] = val
-                                predictions = pd.concat(
-                                    [predictions, pd.DataFrame(self.model.predict(temp), index=self.df[i].index).rename(
-                                        columns={0: feature + '_' + str(float(val))})], axis=1)
-                        else:
-                            pass  # no protected class feature(s) in dataframe
-        return predictions
+        temp = copy.deepcopy(df)
+        for i in range(len(combinations)): # iterate across list of tuples, where each tuple is unique combination of protected class feature values
+            temp[self.config['protected_class_features']] = combinations[i]
+            predictions = pd.concat([predictions, pd.DataFrame(self.model.predict(temp), index=df.index).rename(
+                columns={0: i})], axis=1)
+
+        # Drop duplicate prediction columns (e.g. one-hot vectors)
+        predictions = self.drop_duplicate_cols(predictions)
+
+        # Create mapping of column numbers to particular feature-value combinations
+        # Returns dictionary of tuples for combo (each set of tuples within a list)
+        mapping = {}
+        for i in predictions.columns:
+            mapping[i] = []
+            index = 0  # positional index to map protected class feature name in config to value in combinations
+            for feature in self.config['protected_class_features']:  # get protected class feature order
+                mapping[i].append(tuple((feature, str(combinations[i][index]))))
+                index += 1
+
+        return (predictions, mapping)
 
     def unadjusted_prediction(self) -> pd.core.series.Series:
         '''
@@ -131,83 +181,17 @@ class DiscriminationMitigator:
             marginals[feature] = df[feature].value_counts(normalize=True, dropna=False).to_dict()
         return marginals
 
-    def adjust_missing_categ_vals(self, dictionary: Dict, feature: str, iterated_predictions: pd.core.frame.DataFrame) -> Dict:
+    def weighted_predictions(self, joint_dict: Dict, prediction_df: pd.core.frame.DataFrame) -> pd.core.series.Series:
         '''
-        Method checks whether all categorial values (keys) present in dictionary are also in iterated_predictions (i.e. self.df)
-            and consolidates values corresponding to missing keys into overlapping keys between two sources
-        :param dictionary: dict, inner part of nested dictionary from self.feature_marginals where keys are values of a given protected class feature
-        :param feature: str, protected class feature name
-        :param iterated_predictions: Pandas dataframe, N x K matrix of predictions from self.iterate_predictions
-        :return: dictionary of overlapping keys between param dictionary and parm iterated_predictions
+        Obtains weighted predictions, with weights corresponding to the joint distributions of the training set, df,
+            or custom weights.
+        :param joint_dict: dictionary of joint distributions corresponding to columns in `prediction_df`
+        :param prediction_df: counterfactual predictions from self.iterate_predictions() method
+        :return: Pandas Series of predictions, weighted to reflect joint distributions of train or df
         '''
-
-        # Identify which if any category values (key(s)) of feature missing
-        dict_keys = list(dictionary.keys())
-        feature_values = [float(i.split('_')[-1]) for i in iterated_predictions.columns if feature + '_' in i]
-        missing_keys = [i for i in dict_keys if i not in feature_values]
-
-        if missing_keys:
-            warnings.warn("\nThe following category value(s) of feature '{}' are present in test dataframe, but not in \n"
-                  "df supplied: {}. These values cannot be directly reweight in supplied df. Weights of \n"
-                  "overlapping categories in both dataframes will be adjusted. \n"\
-                  .format(feature, ' '.join([str(i) for i in missing_keys])))
-
-        # Sum share of all categories not present in self.df but in self.train
-        tot_share = 0
-        for x in missing_keys:
-            tot_share += dictionary[x]
-        adjustment = 1 - tot_share
-
-        # Adjust overlapping keys
-        overlapping_keys = [i for i in dict_keys if i not in missing_keys]
-        for key in overlapping_keys:
-            dictionary[key] = dictionary[key] / adjustment
-
-        # Delete non-overlapping keys from dictionary
-        for key in missing_keys:
-            del dictionary[key]
-
-        return dictionary
-
-    def check_for_onehot(self) -> None:
-        '''
-        Checks whether any protected class features in self.df are extremely correlated, suggesting one-hot vectors. Users
-            must ensure that if there is no reference category in trained model that adjacent one-hot vector marginals
-            uniquely identify observations. E.g. for two one-hot vectors, if 80% of observations for vector1=1, vector2=1
-            must be the corresponding 20%.
-        :return: nothing, a warning message if two or more features are correlated > 0.9999
-        '''
-        correlations = self.ensure_dataframe(self.df).corr().abs().iloc[0, :]  # correlation matrix, selecting first row
-        extreme_corr = correlations[correlations > 0.9999].index.tolist()
-
-        if extreme_corr:
-            warnings.warn("\nWarning! The following features are extremely correlated and thus may be one-hot vectors: {}. \n"
-                 "If no category is omitted, users must ensure custom marginal weights for one-hot vectors align correctly.".format(' '.join(extreme_corr)))
-
-    def weighted_predictions(self, marginal_dict: Dict, prediction_df: pd.core.frame.DataFrame) -> pd.core.frame.DataFrame:
-        '''
-        Method weights the N x K matrix of predictions in `prediction_df` according to the marginal distribution of each
-            particular categorical value, Ki, based on dictionary of marginals. The reduces the dimension of the prediction
-            matrix down to N x C, where each column is the weighted average (from `marginal_dict`) of protected class
-            feature c.
-        :param marginal_dict: dictionary of marginal distributions per feature in input dataframe
-        :param prediction_df: Pandas dataframe, iterated predictions from self.iterate_predictions()
-        :return: Pandas dataframe with columns being the weighted predictions for each protected class feature, c.
-        '''
-        wt_pred = pd.DataFrame()
-        for feature, val in marginal_dict.items():
-            wt = np.zeros(shape=len(prediction_df))
-            if isinstance(val, dict):  # check if nested dictionary, must be if 1+ value per feature
-                for elem, share in marginal_dict[feature].items():
-                    try:
-                        wt += prediction_df[feature + '_' + str(float(elem))] * share
-                    except KeyError: # catch if key not part of dictionary
-                        raise Exception("\nThe category value '{}' in feature '{}' of supplied dictionary does not exist \n"
-                              "in supplied dataframe! Please ensure all values for all protected class features \n"
-                              "in this dictionary exist in the data.".format(elem, feature))
-            else:  # if feature invariant
-                raise ValueError("\nProtected class feature '{}' is invariant!".format(feature))
-            wt_pred = pd.concat([wt_pred, pd.DataFrame({feature: wt})], axis=1)
+        wt_pred = np.zeros(shape=len(prediction_df))
+        for feature, val in joint_dict.items():
+            wt_pred += prediction_df[feature] * val
         return wt_pred
 
     def predictions(self) -> pd.core.frame.DataFrame:
@@ -221,32 +205,35 @@ class DiscriminationMitigator:
                 'cust_wts' - predictions with user-specified marginal weights.
         '''
 
-        # N x K matrix of predictions
-        iterated_predictions = self.iterate_predictions()
+        # Get counterfactual predictions
+        iterated_predictions, mapping = self.iterate_predictions()
 
         # Marginals for either train or df
         if self.train is not None:
             marginals = self.feature_marginals(self.ensure_dataframe(self.train))  # marginals from training set to reweight test with same composition
-            for feature in marginals.keys(): # ensure all categorical values for each feature present in test also in self.df
-                marginals[feature].update(self.adjust_missing_categ_vals(marginals[feature], feature, iterated_predictions))
         else:
             marginals = self.feature_marginals(self.ensure_dataframe(self.df))
 
-        # Collapse down to N x C matrix of weighted predictions
-        weighted_predictions = self.weighted_predictions(marginals, iterated_predictions)
+        # Get joint distributions for iterated_predictions dataframe
+        joint_dict = self.joint_distrib_dict(marginals, mapping)
 
         # Output dataframe of adjusted final predictions
         output_predictions = pd.DataFrame()
         output_predictions['unadj_pred'] = self.unadjusted_prediction()
         output_predictions['unif_wts'] = iterated_predictions.mean(axis=1)  # uniform weights (i.e. simple average)
-        output_predictions['pop_wts'] = weighted_predictions.mean(axis=1)  # weighted to match train or other marginal dist
+        output_predictions['pop_wts'] = self.weighted_predictions(joint_dict, iterated_predictions)  # weighted to reflect joint distributions of train or df
 
         # Dictionary of custom weights that combine user-supplied weights with marginals of either train or df
         if self.weights is not None:
-            self.check_for_onehot() # check if one-hot vectors possibly present and warn
 
-            # Condense user-specified marginal weights to N x 1 vector
-            reweighted_predictions = self.weighted_predictions(self.weights, iterated_predictions)
-            output_predictions['cust_wts'] = reweighted_predictions.mean(axis=1)
+            # Append missing protected class feature marginals, if any missing
+            for key in [i for i in marginals.keys() if i not in self.weights.keys()]:
+                self.weights.update({key: marginals[key]})
+
+            # Get joint distributions using custom weights
+            joint_dict_cust = self.joint_distrib_dict(self.weights, mapping)
+
+            # Produce final N x 1 vector of custom weighted predictions
+            output_predictions['cust_wts'] = self.weighted_predictions(joint_dict_cust, iterated_predictions)
 
         return output_predictions
