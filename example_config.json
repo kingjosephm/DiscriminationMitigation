@@ -1,4 +1,4 @@
 {
-  "protected_class_features": ["c0", "c1", "z"],
+  "protected_class_features": ["c0", "c1", "z", "a"],
   "target_feature": ["y"]
 }
