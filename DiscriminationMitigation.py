@@ -78,17 +78,6 @@ class DiscriminationMitigator:
             combos.append(list(df[feature].unique()))
         return combos
 
-    def drop_duplicate_cols(self, df: pd.core.frame.DataFrame) -> pd.core.frame.DataFrame:
-        '''
-        Drops duplicate highly correlated features of a Pandas DataFrame, if any.
-        :param df: Pandas DataFrame
-        :return: Pandas DataFrame, minus highly correlated features
-        '''
-        corr_matrix = df.corr().abs()
-        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(np.bool)) # select upper triangle of matrix
-        to_drop = [col for col in upper.columns if any(upper[col] > 0.9999)]
-        return df.drop(columns=to_drop)
-
     def sum_dict_vals(self, dictionary: Dict) -> float:
         '''
         Calculates the sum of the values of a non-nested dictionary.
@@ -144,9 +133,6 @@ class DiscriminationMitigator:
             predictions = pd.concat([predictions, pd.DataFrame(self.model.predict(temp), index=df.index).rename(
                 columns={0: i})], axis=1)
 
-        # Drop duplicate prediction columns (e.g. one-hot vectors)
-        #predictions = self.drop_duplicate_cols(predictions)
-
         # Create mapping of column numbers to particular feature-value combinations
         # Returns dictionary of tuples for combo (each set of tuples within a list)
         mapping = {}
@@ -194,14 +180,29 @@ class DiscriminationMitigator:
             wt_pred += prediction_df[feature] * val
         return wt_pred
 
+    def check_for_onehot(self) -> None:
+        '''
+        Checks whether any protected class features in self.df are extremely correlated, suggesting one-hot vectors. Users
+            must ensure that if there is no reference category in trained model that adjacent one-hot vector marginals
+            uniquely identify observations. E.g. for two one-hot vectors, if 80% of observations for vector1=1, vector2=1
+            must be the corresponding 20%.
+        :return: nothing, a warning message if two or more features are correlated > 0.9999
+        '''
+        correlations = self.ensure_dataframe(self.df).corr().abs().iloc[0, :]  # correlation matrix, selecting first row
+        extreme_corr = correlations[correlations > 0.9999].index.tolist()
+
+        if extreme_corr:
+            warnings.warn("\nWarning! The following features are extremely correlated and thus may be one-hot vectors: {}. \n"
+                 "If no category is omitted, users must ensure custom marginal weights for one-hot vectors align correctly.".format(' '.join(extreme_corr)))
+
     def predictions(self) -> pd.core.frame.DataFrame:
         '''
         Generates predictions by calling methods of class.
         :return: Pandas dataframe of 3 or possibly 4 columns of predictions:
             'unadj_pred' - unadjusted predictions for self.df
             'unif_wts' - predictions with uniform weights (i.e. simple average across N x K matrix of predictions)
-            'pop_wts' - predictions weighted to reflect the marginal distribution in the training set (if provided) otherwise self.df
                 optionally:
+                'pop_wts' - predictions weighted to reflect the marginal distribution in the training set (if provided)
                 'cust_wts' - predictions with user-specified marginal weights.
         '''
 
@@ -218,6 +219,8 @@ class DiscriminationMitigator:
         output_predictions = pd.DataFrame()
         output_predictions['unadj_pred'] = self.unadjusted_prediction()
         output_predictions['unif_wts'] = iterated_predictions.mean(axis=1)  # uniform weights (i.e. simple average)
+
+        # Generate population weights from self.train if supplied
         if self.train is not None:
             # Get joint distributions for iterated_predictions dataframe
             joint_dict = self.joint_distrib_dict(marginals, mapping)
@@ -225,6 +228,8 @@ class DiscriminationMitigator:
 
         # Dictionary of custom weights that combine user-supplied weights with marginals of either train or df
         if self.weights is not None:
+
+            self.check_for_onehot()  # check if one-hot vectors possibly present and warn
 
             # Append missing protected class feature marginals, if any missing
             for key in [i for i in marginals.keys() if i not in self.weights.keys()]:
