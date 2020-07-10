@@ -70,6 +70,8 @@ model_w_class.add(tf.keras.layers.Dense(1))
 
 model_w_class.compile(optimizer='adam', loss='mse')
 
+# only change in model below is that we have input shape of 2 instead of 4
+# This is because we are dropping the 2 class variables.
 tf.keras.backend.clear_session()
 model_wo_class = tf.keras.Sequential()
 model_wo_class.add(tf.keras.layers.Input(shape=2,))
@@ -93,11 +95,11 @@ X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, random_state
 model_w_class.fit(X_train, y_train, epochs=10, batch_size=64, validation_data=(X_val, y_val))
 
 
-X_train_wo_class, X_test_wo_class, y_train, y_test = train_test_split(data.loc[:, ~data.columns.isin(config['target_feature'] + ["c0", "c1"])],
+X_train_wo_class, X_test_wo_class, y_train_wo_class, y_test_wo_class = train_test_split(data.loc[:, ~data.columns.isin(config['target_feature'] + ["c0", "c1"])],
                                                     data[config['target_feature']], random_state=1776,
                                                     test_size=0.2)
-X_train_wo_class, X_val_wo_class, y_train, y_val = train_test_split(X_train_wo_class, y_train, random_state=123, test_size=0.2)
-model_wo_class.fit(X_train_wo_class, y_train, epochs=10, batch_size=64, validation_data=(X_val_wo_class, y_val))
+X_train_wo_class, X_val_wo_class, y_train_wo_class, y_val_wo_class = train_test_split(X_train_wo_class, y_train_wo_class, random_state=123, test_size=0.2)
+model_wo_class.fit(X_train_wo_class, y_train_wo_class, epochs=10, batch_size=64, validation_data=(X_val_wo_class, y_val_wo_class))
 
 #######################################################################################
 # create the figures
@@ -170,9 +172,6 @@ y_hat_wo_class = model_wo_class.predict(X_test.loc[:,["w0", "w1"]])
 axs.scatter(X_test.loc[:,["w0"]], y_hat_wo_class,color = "purple", marker= 'x',
             label='prediction: class omitted', s=.2)
 
-y_hat = model_w_class.predict(X_test)
-axs.scatter(X_test.loc[:,"w0"], y_test, color = "purple", marker= 'x',
-            label='prediction: class omited', s=.2)
 
 w1_mean = (gamma[1,0] + gamma[1,1])/2
 X_hypotheticals__to_draw_line = pd.DataFrame({"w0": w0_space, "w1": w0_space * 0 + w1_mean})
@@ -184,9 +183,9 @@ axs.plot(X_hypotheticals__to_draw_line.loc[:,"w0"], y_hypothetical, color="orang
 
 # fig 4 -- on fig1, overlay lines and predictions for model with class, with mitigation
 # base scatterplot ###
-fig3, axs = plt.subplots(ncols=1)
+fig4, axs = plt.subplots(ncols=1)
 axs.scatter(c0_data.loc[:, "w0"],c0_data.loc[:, "y"],color='blue', marker= '.', label='Group 0', s=0.01)
-axs.scatter(c1_data.loc[:, "w0"],c1_data.loc[:, "y"],color= 'red', marker='.', label='Group 1', s=0.01)
+axs.scatter(c1_data.loc[:, "w0"],c1_data.loc[:, "y"],color= 'red', marker= '.', label='Group 1', s=0.01)
 
 axs.set_title('Different intercepts for different groups')
 axs.set_xlabel('w0')
@@ -194,9 +193,21 @@ axs.set_ylabel('y')
 axs.legend(loc='best')
 # end base scatterplot ###
 
-config = {"protected_class_features": ["c0", "c1"], "target_feature": "y"}
-ex1 = DiscriminationMitigator(df=X_test, model=model_w_class, config=config, train=None, weights=None).predictions()
+config = {"protected_class_features": ["c0", "c1"], "target_feature": ["y"]}
+y_hat_mitigated = DiscriminationMitigator(df=X_test, model=model_w_class, config=config,
+                                          train=None, weights={"c0":["0.5", "0.5"], "c1":["0.5", "0.5"]}).predictions()
 
-y_hat = model_w_class.predict(X_test)
-axs.scatter(X_test.loc[:,"w0"], y_test, color = "purple", marker= 'x',
+axs.scatter(X_test.loc[:,"w0"], y_hat_mitigated["pop_wts"] , color = "purple", marker= 'x',
             label='prediction: class omited', s=.2)
+
+# these are used for creating a line on the plot, which, for this dgp, should be the best-fitting line
+# for mitigated prediction values.
+X_hypotheticals_for_mitigation = pd.DataFrame({"c0": w0_space*0 + 0.5, "c1": w0_space*0 + 0.5,
+                                               "w0": w0_space, "w1": w0_space * 0 + w1_mean})
+# class variables should not affect mitigated predictions.
+# oh...  i get it...  it is using the class variables to determine the weights, which accounts for the parallel shifts!
+
+y_hat_mitigated_hypotheticals = DiscriminationMitigator(df=X_hypotheticals_for_mitigation, model=model_w_class,
+                                                        config=config, train=None, weights=None).predictions()
+axs.plot(X_hypotheticals__to_draw_line.loc[:,"w0"], y_hat_mitigated_hypotheticals ["pop_wts"], color="purple")
+
