@@ -145,7 +145,7 @@ class DiscriminationMitigator:
                 columns={0: i})], axis=1)
 
         # Drop duplicate prediction columns (e.g. one-hot vectors)
-        predictions = self.drop_duplicate_cols(predictions)
+        #predictions = self.drop_duplicate_cols(predictions)
 
         # Create mapping of column numbers to particular feature-value combinations
         # Returns dictionary of tuples for combo (each set of tuples within a list)
@@ -214,14 +214,14 @@ class DiscriminationMitigator:
         else:
             marginals = self.feature_marginals(self.ensure_dataframe(self.df))
 
-        # Get joint distributions for iterated_predictions dataframe
-        joint_dict = self.joint_distrib_dict(marginals, mapping)
-
         # Output dataframe of adjusted final predictions
         output_predictions = pd.DataFrame()
         output_predictions['unadj_pred'] = self.unadjusted_prediction()
         output_predictions['unif_wts'] = iterated_predictions.mean(axis=1)  # uniform weights (i.e. simple average)
-        output_predictions['pop_wts'] = self.weighted_predictions(joint_dict, iterated_predictions)  # weighted to reflect joint distributions of train or df
+        if self.train is not None:
+            # Get joint distributions for iterated_predictions dataframe
+            joint_dict = self.joint_distrib_dict(marginals, mapping)
+            output_predictions['pop_wts'] = self.weighted_predictions(joint_dict, iterated_predictions)  # weighted to reflect joint distributions of train or df
 
         # Dictionary of custom weights that combine user-supplied weights with marginals of either train or df
         if self.weights is not None:
