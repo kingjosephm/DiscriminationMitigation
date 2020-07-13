@@ -1,4 +1,4 @@
-import warnings, copy, lightgbm, re
+import warnings, copy, lightgbm
 import pandas as pd
 import numpy as np
 import tensorflow as tf
@@ -169,8 +169,7 @@ class DiscriminationMitigator:
 
     def weighted_predictions(self, joint_dict: Dict, prediction_df: pd.core.frame.DataFrame) -> pd.core.series.Series:
         '''
-        Obtains weighted predictions, with weights corresponding to the joint distributions of the training set, df,
-            or custom weights.
+        Obtains weighted predictions, with weights corresponding to the joint distributions of the training set or custom weights.
         :param joint_dict: dictionary of joint distributions corresponding to columns in `prediction_df`
         :param prediction_df: counterfactual predictions from self.iterate_predictions() method
         :return: Pandas Series of predictions, weighted to reflect joint distributions of train or df
@@ -198,9 +197,9 @@ class DiscriminationMitigator:
     def predictions(self) -> pd.core.frame.DataFrame:
         '''
         Generates predictions by calling methods of class.
-        :return: Pandas dataframe of 3 or possibly 4 columns of predictions:
+        :return: Pandas dataframe of 2-4 columns of predictions:
             'unadj_pred' - unadjusted predictions for self.df
-            'unif_wts' - predictions with uniform weights (i.e. simple average across N x K matrix of predictions)
+            'unif_wts' - predictions with uniform weights (i.e. simple average across N x V matrix of predictions)
                 optionally:
                 'pop_wts' - predictions weighted to reflect the marginal distribution in the training set (if provided)
                 'cust_wts' - predictions with user-specified marginal weights.
