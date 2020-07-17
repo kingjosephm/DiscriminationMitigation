@@ -1,0 +1,52 @@
+---
+title: "Emprical Analysis"
+site: bookdown::bookdown_site
+documentclass: book
+bibliography: reference/library.bib
+csl: reference/chicago.csl
+suppress-bibliography: no
+link-citations: yes
+output:
+  word_document:
+    reference_docx: reference/IDAPubTemplate022616_DRAFT.dotx
+    pandoc_args: ["--filter", "pandoc-crossref", "-M", crossrefYaml=reference/pandoc-crossref-ah.yml, "--lua-filter=reference/pagebreak.lua"]
+    md_extensions: +abbreviations
+    fig_caption: true
+    toc: true
+---
+```{r, eval=TRUE, include=FALSE}
+library(pander)
+library(haven)
+library(tidyverse)
+panderOptions('big.mark', ",")
+#Chunk responsible for loading all of the packages required to make rendering a basic markdown table from a flat file. This includes a general formatting instruction: using a comma as a thousands separator. There are lots of other options, but I do not use them here.
+
+panderOptions('missing', '')
+#This option informs pander to not report "NA" in a table/figure when there is a missing value, it will just be an empty space.  The default is to report "NA" in a cell of a table.
+
+panderOptions('keep.line.breaks', TRUE)
+panderOptions('table.style', 'multiline')
+panderOptions('table.continues', '')
+panderOptions('table.continues.affix', '')
+#These options govern table formatting.  I am turning off features that add automatic text and prevent multi-line tables within a cell.  Sometimes these features can result in errors for pandoc-crossref.
+
+options(scipen=999)
+#This option gets rid of scientific notation in r-generated content. If someone was to ever want to switch back to the default, it is 0.
+```
+
+
+```{r, eval=TRUE, include=FALSE}
+# Reading an external csv file that will be used to create dynamic inputs for later use in the paper.
+#dynamic_entries = read.csv("figures/dynamic_entries.csv")
+
+#Now loading variables that will later be used in the paper
+#total_entries<-formatC(dynamic_entries$total_records[1], big.mark=",")
+#match_pct<-paste(dynamic_entries$match_pct[1],"%",sep = "")
+#exit_pct<-paste(dynamic_entries$exit_pct[1],"%",sep = "")
+```
+
+```{r, eval=TRUE, include=FALSE}
+enlisted_isc<-read_csv("figures/dynamic_entries.csv")
+enlisted_isc_top5<-slice(enlisted_isc,1:5)
+# This code chunk does the necessary transformation to turn a data set with values and column names into an object that the pander() will use to render a completed table.
+```

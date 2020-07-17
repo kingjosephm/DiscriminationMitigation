@@ -33,7 +33,6 @@ has already been trained.
 particular  
 
 
-
 Below we discuss several fairness criteria with the aim of illustrating the
 above problems.  This discussion is not comprehensive; instead we would point 
 readers to _____.  
