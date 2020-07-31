@@ -1,3 +1,5 @@
 {
-  "protected_class_features": ["c0", "c1"]
+  "protected_class_features": ["g0", "g1"],
+  "weights" : {"g0": [1.0, 0.0]},
+  "target_feature": ["y"]
 }
