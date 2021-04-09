@@ -130,6 +130,9 @@ class DiscriminationMitigator:
         temp = copy.deepcopy(df)
         for i in range(len(combinations)): # iterate across list of tuples, where each tuple is unique combination of protected class feature values
             temp[self.config['protected_class_features']] = combinations[i]
+            # Ensure dtypes match self.df
+            for x in df.columns:
+                temp[x] = temp[x].astype(df[x].dtypes.name)
             predictions = pd.concat([predictions, pd.DataFrame(self.model.predict(temp), index=df.index).rename(
                 columns={0: i})], axis=1)
 
