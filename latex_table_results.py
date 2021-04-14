@@ -151,11 +151,11 @@ def reg_table_descriptives():
             if table[1].iloc[i, 3] < 0.0005:
                 coef.iloc[i] = coef.iloc[i] + '***'
             elif table[1].iloc[i, 3] < 0.005:
-                coef.iloc[i] = coef.iloc[i] + '** '
+                coef.iloc[i] = coef.iloc[i] + '**'
             elif table[1].iloc[i, 3] < 0.025:
-                coef.iloc[i] = coef.iloc[i] + '*  '
+                coef.iloc[i] = coef.iloc[i] + '*'
             else:
-                coef.iloc[i] = coef.iloc[i] + '   '
+                pass
 
         # create 1d dataframe of stacked coefficients and standard errors
         name = '(' + str(count) + ')'
@@ -178,6 +178,51 @@ def reg_table_descriptives():
         observations = pd.DataFrame({name: '{:,}'.format(int(table[0].iloc[3, 1]))}, index=['N'])
         r2 = pd.DataFrame({name: table[0].iloc[6, 1]}, index=['R-squared'])
         for col in [model_type, dep_var, observations, r2]:
+            temp = pd.concat([temp, col], axis=0, ignore_index=False)
+
+        # Attach finally to combined results
+        results = pd.concat([results, temp], axis=1)
+
+        count += 1
+
+    return results
+
+def forecast_differences(models):
+
+    count = 1
+    results = pd.DataFrame()
+    for table in models:
+
+        # Restrict to Black dummy and intercept, also reverses sort index
+        table[1] = table[1].iloc[:2, ].sort_index()
+        table[1] = table[1].rename(index={'blk': 'Black'})
+
+        coef = table[1].iloc[:, 0].map('{:.3f}'.format)  # round to three decimal places or add trailing zeros as needed
+        se = table[1].iloc[:, 1].map('{:.3f}'.format)
+
+        # significance stars for 95% 99%, 99.9% confidence, 2-tailed t-test
+        for i in range(len(coef)):
+            if table[1].iloc[i, 3] < 0.0005:
+                coef.iloc[i] = coef.iloc[i] + '***'
+            elif table[1].iloc[i, 3] < 0.005:
+                coef.iloc[i] = coef.iloc[i] + '**'
+            elif table[1].iloc[i, 3] < 0.025:
+                coef.iloc[i] = coef.iloc[i] + '*'
+            else:
+                pass
+
+        # create 1d dataframe of stacked coefficients and standard errors
+        name = '(' + str(count) + ')'
+        temp = pd.DataFrame(columns=[name])
+        for row in range(len(table[1])):
+            temp = pd.concat([temp, pd.DataFrame({name: coef.iloc[row]}, index=[coef.index[row]])])
+            temp = pd.concat([temp, pd.DataFrame({name: '('+se.iloc[row]+')'}, index=[''])])
+
+        # model diagnostics
+        model_type = pd.DataFrame({name: table[0].iloc[0, 1]}, index=['Estimator'])
+        dep_var = pd.DataFrame({name: table[0].iloc[1, 1]}, index=['Dependent Variable'])
+        observations = pd.DataFrame({name: '{:,}'.format(int(table[0].iloc[3, 1]))}, index=['N'])
+        for col in [model_type, dep_var, observations]:
             temp = pd.concat([temp, col], axis=0, ignore_index=False)
 
         # Attach finally to combined results
@@ -234,5 +279,70 @@ if __name__ == '__main__':
     results = reg_table_descriptives()
     print(results.to_latex()) # edited further by hand
 
+    ##################################################
+    #####    Discrimination in high/low earners  #####
+    ##################################################
 
+    y = df['50k']
+    X = df[['blk', 'AGE', 'AGE2', 'AGE3', 'SEX', 'EDUC', 'SCHLCOLL', 'MARST', 'pt']]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=999)
+    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=999)
 
+    # Raw gap in X_test
+    raw_highlow = sm.OLS(y_test, sm.add_constant(X_test['blk'].astype('int'))).fit(cov_type='HC3', use_t=True).summary2().tables
+
+    ##### Naive model #####
+    model1 = lgb.LGBMClassifier(objective='binary',
+                                random_state=999,
+                                metric='logloss')
+    X_train_mod = X_train.loc[:, X_train.columns != 'blk']
+    X_val_mod = X_val.loc[:, X_val.columns != 'blk']
+    X_test_mod = X_test.loc[:, X_test.columns != 'blk']
+    model1.fit(X_train_mod, y_train, eval_set=[(X_val_mod, y_val)], eval_metric='logloss', early_stopping_rounds=10, verbose=False)
+
+    naive_pred = model1.predict(X_test_mod)
+    naive_perform = binary_metrics(y_test, naive_pred)
+    naive = combine_prediction(X_test, y_test, naive_pred)
+
+    naive_reg = sm.add_constant(naive)  # add constant
+    naive_reg['blk'] = naive_reg['blk'].astype(int)
+    table5 = sm.OLS(naive_reg['pred'], naive_reg[['const', 'blk']]).fit(cov_type='HC3', use_t=True).summary2().tables
+
+    ##### Discriminatory model #####
+    model2 = lgb.LGBMClassifier(objective='binary',
+                               random_state=999,
+                               metric='logloss')
+    model2.fit(X_train, y_train, eval_set=[(X_val, y_val)], eval_metric='logloss', early_stopping_rounds=10, verbose=False)
+    discrim_pred = model2.predict(X_test)
+    discrim_perform = binary_metrics(y_test, discrim_pred)
+    discrim = combine_prediction(X_test, y_test, discrim_pred)
+
+    discrim_reg = sm.add_constant(discrim)  # add constant
+    discrim_reg['blk'] = discrim_reg['blk'].astype(int)
+    table6 = sm.OLS(discrim_reg['pred'], discrim_reg[['const', 'blk']]).fit(cov_type='HC3', use_t=True).summary2().tables
+
+    ##### DiscriminationMitigator #####
+    config = {'protected_class_features': ['blk']}
+    mitigated = DiscriminationMitigator(df=X_test, model=model2, config=config).predictions()
+    mitigated['thresh_0.5'] = np.where(mitigated['unif_wts'] >= 0.5, 1, 0) # naive threshold of 0.5
+
+    mitigated_perform = binary_metrics(y_test, mitigated['thresh_0.5'])
+
+    mitigated_reg = sm.add_constant(mitigated)  # add constant
+    mitigated_reg['blk'] = X_test['blk']
+    mitigated_reg['blk'] = mitigated_reg['blk'].astype(int)
+    table7 = sm.OLS(mitigated_reg['thresh_0.5'],
+                    mitigated_reg[['const', 'blk']]).fit(cov_type='HC3', use_t=True).summary2().tables
+
+    results = forecast_differences([raw_highlow, table5, table6, table7])
+    print(results.to_latex())  # edited further by hand
+
+    # Combine performance metrics
+    performance = pd.DataFrame()
+    performance = pd.concat([performance,
+                             pd.DataFrame.from_dict(naive_perform, orient='index', columns=['Naive Model'])], axis=1)
+    performance = pd.concat([performance,
+                             pd.DataFrame.from_dict(discrim_perform, orient='index', columns=['Discriminatory Model'])], axis=1)
+    performance = pd.concat([performance,
+                             pd.DataFrame.from_dict(mitigated_perform, orient='index', columns=['Mitigated Model'])], axis=1)
+    print(performance.to_latex()) # edited further by hand
