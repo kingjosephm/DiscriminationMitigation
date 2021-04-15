@@ -4,9 +4,8 @@ import lightgbm as lgb
 import statsmodels.api as sm
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix, roc_auc_score, f1_score, precision_recall_curve
+from sklearn.metrics import confusion_matrix, roc_auc_score
 from DiscriminationMitigation import DiscriminationMitigator
-import tabulate
 
 pd.set_option('display.max_columns', 50)
 
@@ -334,15 +333,81 @@ if __name__ == '__main__':
     table7 = sm.OLS(mitigated_reg['thresh_0.5'],
                     mitigated_reg[['const', 'blk']]).fit(cov_type='HC3', use_t=True).summary2().tables
 
-    results = forecast_differences([raw_highlow, table5, table6, table7])
-    print(results.to_latex())  # edited further by hand
+    # Combined forecast results across models
+    results_binary = forecast_differences([raw_highlow, table5, table6, table7])
+    print(results_binary.to_latex())  # edited further by hand
 
     # Combine performance metrics
-    performance = pd.DataFrame()
-    performance = pd.concat([performance,
+    performance_binary = pd.DataFrame()
+    performance_binary = pd.concat([performance_binary,
                              pd.DataFrame.from_dict(naive_perform, orient='index', columns=['Naive Model'])], axis=1)
-    performance = pd.concat([performance,
+    performance_binary = pd.concat([performance_binary,
                              pd.DataFrame.from_dict(discrim_perform, orient='index', columns=['Discriminatory Model'])], axis=1)
-    performance = pd.concat([performance,
+    performance_binary = pd.concat([performance_binary,
                              pd.DataFrame.from_dict(mitigated_perform, orient='index', columns=['Mitigated Model'])], axis=1)
-    print(performance.to_latex()) # edited further by hand
+    print(performance_binary.to_latex()) # edited further by hand
+
+    ##################################################
+    #####   Discrimination in high-wage earners  #####
+    ##################################################
+
+    y = df['lnwage']
+    X = df[['blk', 'AGE', 'AGE2', 'AGE3', 'SEX', 'EDUC', 'SCHLCOLL', 'MARST', 'pt']]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=999)
+    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=999)
+
+    # Raw gap in X_test
+    raw_highwage = sm.OLS(y_test, sm.add_constant(X_test['blk'].astype('int'))).fit(cov_type='HC3', use_t=True).summary2().tables
+
+    ##### Naive model #####
+    model3 = lgb.LGBMRegressor(random_state=999,
+                               metric='mean_squared_error')
+    X_train_mod = X_train.loc[:, X_train.columns != 'blk']
+    X_val_mod = X_val.loc[:, X_val.columns != 'blk']
+    X_test_mod = X_test.loc[:, X_test.columns != 'blk']
+    model3.fit(X_train_mod, y_train, eval_set=[(X_val_mod, y_val)], eval_metric='mean_squared_error',
+               early_stopping_rounds=10, verbose=False)
+
+    naive_pred_cont = model3.predict(X_test_mod)
+    naive_perform_cont = continuous_metrics(y_test, naive_pred_cont)
+    naive_cont = combine_prediction(X_test, y_test, naive_pred_cont, outcome='lnwage')
+
+    naive_reg_cont = sm.add_constant(naive_cont)  # add constant
+    naive_reg_cont['blk'] = naive_reg_cont['blk'].astype(int)
+    table8 = sm.OLS(naive_reg_cont['pred'], naive_reg_cont[['const', 'blk']]).fit(cov_type='HC3', use_t=True).summary2().tables
+
+    ##### Discriminatory model #####
+    model4 = lgb.LGBMRegressor(random_state=999,
+                               metric='mean_squared_error')
+    model4.fit(X_train, y_train, eval_set=[(X_val, y_val)], eval_metric='MSE', early_stopping_rounds=10, verbose=False)
+    discrim_pred_cont = model4.predict(X_test)
+    discrim_perform_cont = continuous_metrics(y_test, discrim_pred_cont)
+    discrim_cont = combine_prediction(X_test, y_test, discrim_pred_cont, outcome='lnwage')
+
+    discrim_reg_cont = sm.add_constant(discrim_cont)  # add constant
+    discrim_reg_cont['blk'] = discrim_reg_cont['blk'].astype(int)
+    table9 = sm.OLS(discrim_reg_cont['pred'], discrim_reg_cont[['const', 'blk']]).fit(cov_type='HC3', use_t=True).summary2().tables
+
+    ##### Mitigated model #####
+    mitigated_cont = DiscriminationMitigator(df=X_test, model=model4, config=config).predictions()
+    mitigated_perform_cont = continuous_metrics(y_test, mitigated_cont['unif_wts'])
+
+    mitigated_reg_cont = sm.add_constant(mitigated_cont)  # add constant
+    mitigated_reg_cont['blk'] = X_test['blk']
+    mitigated_reg_cont['blk'] = mitigated_reg_cont['blk'].astype(int)
+    table10 = sm.OLS(mitigated_reg_cont['unif_wts'], mitigated_reg_cont[['const', 'blk']]).fit(cov_type='HC3',
+                                                                                     use_t=True).summary2().tables
+
+    # Combined forecast results across models
+    results_cont = forecast_differences([raw_highwage, table8, table9, table10])
+    print(results_cont.to_latex())  # edited further by hand
+
+    # Combine performance metrics
+    performance_cont = pd.DataFrame()
+    performance_cont = pd.concat([performance_cont,
+                             pd.DataFrame.from_dict(naive_perform_cont, orient='index', columns=['Naive Model'])], axis=1)
+    performance_cont = pd.concat([performance_cont,
+                             pd.DataFrame.from_dict(discrim_perform_cont, orient='index', columns=['Discriminatory Model'])], axis=1)
+    performance_cont = pd.concat([performance_cont,
+                             pd.DataFrame.from_dict(mitigated_perform_cont, orient='index', columns=['Mitigated Model'])], axis=1)
+    print(performance_cont.to_latex()) # edited further by hand
