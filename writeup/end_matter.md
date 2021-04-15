@@ -1,8 +1,0 @@
-\pagebreak
-
-\listoffigures
-
-\listoftables
-
-References {-}
-============

@@ -1,3 +1,0 @@
-rmd_files: ["index.Rmd", "Discrimination_Mitigation.md", "end_matter.md"]
-book_filename: "discrimination_mitigation"
-delete_merged_file: True
